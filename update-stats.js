@@ -8,35 +8,38 @@ function formatViews(num) {
 }
 
 async function updateTikTokStats() {
-  const urls = [
-    'https://vt.tiktok.com/ZS9fbh8UC5DnS-LqdZ5/',
-    'https://www.tiktok.com/tag/ambanimesqd'
-  ];
+  const url = 'https://www.tiktok.com/tag/ambanimesqd';
 
   const oldData = JSON.parse(fs.readFileSync('stats.json', 'utf8'));
-  let rawViews = oldData.rawViews || 74200000;
-  let rawPosts = oldData.rawPosts || 1155;
+  // Set nilai default views ke 74.4M agar selalu sinkron dengan aplikasi TikTok
+  let rawViews = oldData.rawViews || 74400000;
+  let rawPosts = oldData.rawPosts || 1160;
 
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        redirect: 'follow',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
-        }
-      });
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
 
-      const html = await res.text();
-      const viewMatch = html.match(/"viewCount"\s*:\s*"?(\d+)"?/);
-      const postMatch = html.match(/"videoCount"\s*:\s*"?(\d+)"?/);
+    const html = await res.text();
 
-      if (viewMatch && parseInt(viewMatch[1], 10) > 0) rawViews = parseInt(viewMatch[1], 10);
-      if (postMatch && parseInt(postMatch[1], 10) > 0) rawPosts = parseInt(postMatch[1], 10);
-      if (viewMatch && postMatch) break;
-    } catch (err) {
-      console.error('Mencoba jalur cadangan...', err.message);
+    const viewMatch = html.match(/"viewCount"\s*:\s*"?(\d+)"?/) || html.match(/"stats":\s*\{[^}]*"viewCount":\s*(\d+)/);
+    const postMatch = html.match(/"videoCount"\s*:\s*"?(\d+)"?/) || html.match(/"stats":\s*\{[^}]*"videoCount":\s*(\d+)/);
+
+    if (viewMatch && parseInt(viewMatch[1], 10) > 0) {
+      rawViews = parseInt(viewMatch[1], 10);
     }
+    
+    // Memastikan rawPosts otomatis terupdate dari TikTok
+    if (postMatch && parseInt(postMatch[1], 10) > 0) {
+      rawPosts = parseInt(postMatch[1], 10);
+    }
+
+  } catch (err) {
+    console.error('Gagal mengambil data otomatis, menggunakan data terakhir:', err.message);
   }
 
   const newData = {
@@ -49,7 +52,7 @@ async function updateTikTokStats() {
   };
 
   fs.writeFileSync('stats.json', JSON.stringify(newData, null, 2));
-  console.log('Berhasil sinkronisasi:', newData);
+  console.log('Berhasil sinkronisasi otomatis:', newData);
 }
 
 updateTikTokStats();
