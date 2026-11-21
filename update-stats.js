@@ -8,8 +8,10 @@ function formatViews(num) {
   return num.toString();
 }
 
-function parseShorthand(str) {
-  const clean = str.toUpperCase().replace(/,/g, '').trim();
+function parseNumberValue(val) {
+  if (val === null || val === undefined) return 0;
+  if (typeof val === 'number') return Math.round(val);
+  const clean = String(val).toUpperCase().replace(/,/g, '').trim();
   const num = parseFloat(clean);
   if (isNaN(num)) return 0;
   if (clean.endsWith('B')) return Math.round(num * 1_000_000_000);
@@ -18,9 +20,16 @@ function parseShorthand(str) {
   return Math.round(num);
 }
 
+function extractStats(obj) {
+  if (!obj || typeof obj !== 'object') return { views: 0, posts: 0 };
+  const views = parseNumberValue(obj.viewCount ?? obj.viewCountStr ?? obj.vv);
+  const posts = parseNumberValue(obj.videoCount ?? obj.postCount ?? obj.publishCnt ?? obj.itemCount);
+  return { views, posts };
+}
+
 async function updateTikTokStats() {
   const oldData = JSON.parse(fs.readFileSync('stats.json', 'utf8'));
-  let rawViews = oldData.rawViews || 74400000;
+  let rawViews = oldData.rawViews || 75300000;
   let rawPosts = oldData.rawPosts || 1160;
 
   let foundViews = 0;
@@ -40,18 +49,18 @@ async function updateTikTokStats() {
 
     const page = await context.newPage();
 
-    // Tangkap data API internal TikTok jika termuat di balik layar
+    // 1. Tangkap respons API internal TikTok jika otomatis terpanggil
     page.on('response', async (response) => {
       const url = response.url();
       if (url.includes('challenge/detail') || url.includes('challenge/item_list')) {
         try {
           const json = await response.json();
-          const stats = json?.challengeInfo?.stats || json?.challengeInfo?.statsV2;
-          if (stats) {
-            const v = parseInt(stats.viewCount, 10);
-            const p = parseInt(stats.videoCount, 10);
-            if (v > 0) foundViews = Math.max(foundViews, v);
-            if (p > 0) foundPosts = Math.max(foundPosts, p);
+          const info = json?.challengeInfo;
+          if (info) {
+            const s1 = extractStats(info.stats);
+            const s2 = extractStats(info.statsV2);
+            foundViews = Math.max(foundViews, s1.views, s2.views);
+            foundPosts = Math.max(foundPosts, s1.posts, s2.posts);
           }
         } catch (_) {}
       }
@@ -62,41 +71,77 @@ async function updateTikTokStats() {
       timeout: 45000
     });
 
-    // Tunggu JavaScript TikTok selesai memuat data halaman
     await page.waitForTimeout(6000);
+    console.log('Judul halaman TikTok:', await page.title());
 
-    const title = await page.title();
-    console.log('Judul halaman TikTok:', title);
+    // 2. Baca JSON internal __UNIVERSAL_DATA_FOR_REHYDRATION__ secara langsung
+    const pageInfo = await page.evaluate(() => {
+      const result = { stats: null, statsV2: null, metaDesc: '', headerTexts: [] };
 
-    // 1. Cek JSON internal __UNIVERSAL_DATA_FOR_REHYDRATION__
-    const rehydrationData = await page.evaluate(() => {
-      const el = document.querySelector('#__UNIVERSAL_DATA_FOR_REHYDRATION__');
-      return el ? el.textContent : '';
+      const scriptEl = document.querySelector('#__UNIVERSAL_DATA_FOR_REHYDRATION__');
+      if (scriptEl && scriptEl.textContent) {
+        try {
+          const data = JSON.parse(scriptEl.textContent);
+          const scope = data?.__DEFAULT_SCOPE__ || {};
+          const detail = scope['webapp.challenge-detail'] || {};
+          const info = detail.challengeInfo || {};
+          result.stats = info.stats || null;
+          result.statsV2 = info.statsV2 || null;
+        } catch (_) {}
+      }
+
+      const meta = document.querySelector('meta[name="description"]') || document.querySelector('meta[property="og:description"]');
+      result.metaDesc = meta ? meta.getAttribute('content') || '' : '';
+
+      result.headerTexts = [...document.querySelectorAll('h1, h2, [data-e2e*="challenge"]')]
+        .map(el => el.innerText.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+
+      return result;
     });
 
-    if (rehydrationData) {
-      const vMatches = [...rehydrationData.matchAll(/"viewCount"\s*:\s*"?(\d+)"?/g)];
-      for (const m of vMatches) {
-        const val = parseInt(m[1], 10);
-        if (val > 1000000) foundViews = Math.max(foundViews, val);
-      }
+    console.log('Debug stats:', JSON.stringify(pageInfo.stats));
+    console.log('Debug statsV2:', JSON.stringify(pageInfo.statsV2));
+    console.log('Debug metaDesc:', pageInfo.metaDesc);
+    console.log('Debug headerTexts:', JSON.stringify(pageInfo.headerTexts));
 
-      const pMatches = [...rehydrationData.matchAll(/"videoCount"\s*:\s*"?(\d+)"?/g)];
-      for (const m of pMatches) {
-        const val = parseInt(m[1], 10);
-        if (val > 100) foundPosts = Math.max(foundPosts, val);
-      }
+    const s1 = extractStats(pageInfo.stats);
+    const s2 = extractStats(pageInfo.statsV2);
+    foundViews = Math.max(foundViews, s1.views, s2.views);
+    foundPosts = Math.max(foundPosts, s1.posts, s2.posts);
+
+    // 3. Jika posts masih 0, tembak API detail TikTok dari dalam sesi browser yang sudah lolos verifikasi
+    if (foundPosts === 0) {
+      const apiData = await page.evaluate(async () => {
+        try {
+          const res = await fetch('/api/challenge/detail/?challengeName=ambanimesqd');
+          const json = await res.json();
+          return {
+            stats: json?.challengeInfo?.stats || null,
+            statsV2: json?.challengeInfo?.statsV2 || null
+          };
+        } catch (e) {
+          return { error: e.message };
+        }
+      });
+
+      console.log('Debug API internal:', JSON.stringify(apiData));
+      const a1 = extractStats(apiData.stats);
+      const a2 = extractStats(apiData.statsV2);
+      foundViews = Math.max(foundViews, a1.views, a2.views);
+      foundPosts = Math.max(foundPosts, a1.posts, a2.posts);
     }
 
-    // 2. Cek teks langsung yang tampil di layar browser
-    const bodyText = await page.evaluate(() => document.body.innerText || '');
+    // 4. Fallback baca dari teks halaman & meta deskripsi
+    const combinedText = `${pageInfo.metaDesc} ${pageInfo.headerTexts.join(' ')}`;
     if (foundViews === 0) {
-      const vText = bodyText.match(/([\d.,]+[KMB]?)\s*(?:views|tayangan|penayangan)/i);
-      if (vText) foundViews = parseShorthand(vText[1]);
+      const vMatch = combinedText.match(/([\d.,]+\s*[KMB]?)\s*(?:views|tayangan|penayangan)/i);
+      if (vMatch) foundViews = parseNumberValue(vMatch[1]);
     }
     if (foundPosts === 0) {
-      const pText = bodyText.match(/([\d.,]+[KMB]?)\s*(?:posts|videos|postingan|video)/i);
-      if (pText) foundPosts = parseShorthand(pText[1]);
+      const pMatch = combinedText.match(/([\d.,]+\s*[KMB]?)\s*(?:posts|videos|postingan|video)/i);
+      if (pMatch) foundPosts = parseNumberValue(pMatch[1]);
     }
 
     console.log('Data terbaca -> Posts:', foundPosts, '| Views:', foundViews);
@@ -106,20 +151,8 @@ async function updateTikTokStats() {
     await browser.close();
   }
 
-  if (foundPosts > 0) {
-    const selisihPost = foundPosts - rawPosts;
-    rawPosts = foundPosts;
-    // Jika views asli terbaca, pakai views asli; jika disembunyikan TikTok web, naikkan proporsional
-    if (foundViews > 0) {
-      rawViews = foundViews;
-    } else if (selisihPost > 0) {
-      rawViews = rawViews + (selisihPost * 64000);
-    }
-  } else if (foundViews > 0) {
-    rawViews = foundViews;
-  } else {
-    console.warn('PERINGATAN: TikTok memblokir akses atau memunculkan CAPTCHA di server ini.');
-  }
+  if (foundViews > 0) rawViews = foundViews;
+  if (foundPosts > 0) rawPosts = foundPosts;
 
   const newData = {
     hashtag: '#ambanimesqd',
