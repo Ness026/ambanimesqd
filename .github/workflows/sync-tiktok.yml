@@ -2,7 +2,7 @@ name: Update Hashtag AMBANIMESQD
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,12 +20,9 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Siapkan Playwright Chromium
-        run: |
-          npm install --no-save playwright
-          npx playwright install chromium
-
       - name: Jalankan pembaca TikTok
+        env:
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
         run: node update-stats.js
 
       - name: Simpan dan push perubahan ke GitHub
