@@ -20,13 +20,17 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Siapkan Playwright Chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install chromium
+
       - name: Jalankan pembaca TikTok
         run: node update-stats.js
 
-      - name: Simpan angka terbaru
+      - name: Simpan dan push perubahan ke GitHub
         run: |
-          git config --global user.name "AMBANIMESQD AutoBot"
-          git config --global user.email "ambanimesqd@bot.com"
-          git pull origin main --rebase || true
+          git config user.name "AMBANIMESQD AutoBot"
+          git config user.email "ambanimesqd@bot.com"
           git add stats.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: auto-update #ambanimesqd stats" && git push)
+          git diff --staged --quiet || (git commit -m "chore: auto-update #ambanimesqd stats" && git push)
